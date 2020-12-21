@@ -2,7 +2,6 @@
 #;;; -*- coding: utf-8; tab-width: 2; -*-
 
 # TODO
-# env の確認、パイプのテストなど
 # 番組情報.json の出力（番組情報の数値を文字列化）
 # Ctrl+C のトラップ（正常終了させる）
 
@@ -13,15 +12,8 @@ require 'logger'
 require 'optparse'
 require 'fileutils'
 require 'pry'
-=begin
-- コマンドは zenroku -s serviceId [-o dir] [-m marginSec] [-f "%Y%m%d_%H%M %%T.ts"] [-l logfile] [-p] [-h host:port] みたいな感じ
-- 終了しないコマンド。background で動かすイメージ
-- marginSec は mirakc の server.stream-time-limit 以内。デフォルトは 5秒。
-- -f がなければデフォルト "%Y%m%d_%H%M %T.ts"
-- -o がなければファイル出力しない
-- -p は標準出力する。パイプ用。 " | ffmpeg -i /dev/stdin ..." みたいな使い方を想定。
 
-コマンド自体のメッセージはすべて標準エラー出力とする
+=begin
 
 FORMAT
 strftimeに従う。その他
@@ -30,13 +22,11 @@ strftimeに従う。その他
 %%S ... サービス名（ＮＨＫ総合１・東京） 
 %%s ... ServiceId（1024）
 
-
 番組情報
 ジャンル、コンポーネントの定義はここ
 https://github.com/youzaka/ariblib/blob/488ad38bbc54dc2544391d120a95f75dfcf32902/ariblib/constants.py
 見やすい表
 https://350ml.net/labo/iepg2.html
-
 =end
 
 DEFAULT_MIRAKC_HOST = 'localhost'
@@ -110,11 +100,11 @@ class Program
       "TSREC_NETWORK_ID" => @network_id.to_s,
       "TSREC_DESC" => @desc,
       "TSREC_EXTENDED" => @more_desc&.gsub("\n", "\\n"),
-	  "TSREC_OUT_PATH" => @full_path.to_s,
-	  "TSREC_OUT_PATH_BASE" => @full_path.to_s.gsub(/\.+?$/, ''),
-	  "TSREC_OUT_DIR" => $out_dir.to_s,
-	  "TSREC_OUT_BASE" => File.basename(@file_name, ".*"),
-	  "TSREC_OUT_EXT" => File.extname(@file_name),
+      "TSREC_OUT_PATH" => @full_path.to_s,
+      "TSREC_OUT_PATH_BASE" => @full_path.to_s.gsub(/\.+?$/, ''),
+      "TSREC_OUT_DIR" => $out_dir.to_s,
+      "TSREC_OUT_BASE" => File.basename(@file_name, ".*"),
+      "TSREC_OUT_EXT" => File.extname(@file_name),
     }
   end
   
@@ -187,14 +177,14 @@ def main
   process_list = []
   program_hash = get_future_programs($opt_service_id)&.first
   if program_hash.nil?
-    $stderr.puts "[ERROR] Failed to get next program"
+    $stderr.puts "[ERROR] Failed to get the next program"
     abort
   end
   program = Program.new(program_hash)
   program.wait_rec_start
   begin
     program.do_rec
-	process_list << {pid: program.pid, end_at: program.end_at}
+    process_list << {pid: program.pid, end_at: program.end_at}
     process_list.select!{|process| File.exist?("/proc/#{process[:pid]}")}
     zombees = process_list.select{|process| process[:end_at] + 10 < Time.now}
     $log.warn "録画プロセスが終了時刻になっても録画を終了していません [PID: #{zombees.join(',')}]" unless zombees.empty?

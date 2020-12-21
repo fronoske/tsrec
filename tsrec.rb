@@ -244,8 +244,8 @@ opts.on("-o outDir",           String,  "Output directory"){|v| $opt_out_dir = v
 opts.on("-f outfileFormat",    String,  "out file format (default: #{DEFAULT_OUTFILE_FORMAT})"){|v| $opt_outfile_format = v }
 opts.on("-p command",          String,  "pipe command"){|v| $opt_pipe = v }
 opts.on("-d",                           "debug mode"){|v| $opt_debug = v }
-opts.on("-l logfile",  String,          "output log (default: stderr)"){|v| $opt_logfile = v }
-opts.on("-u mirakc host:port", String,  "mirakc host:port (default: #{DEFAULT_MIRAKC_HOST}:#{DEFAULT_MIRAKC_PORT})"){|v| $opt_mirakc_host, $opt_mirakc_port = v.split(":") }
+opts.on("-l logfile",          String,  "output log (default: stderr)"){|v| $opt_logfile = v }
+opts.on("-u host:port",        String,  "mirakc host:port (default: #{DEFAULT_MIRAKC_HOST}:#{DEFAULT_MIRAKC_PORT})"){|v| $opt_mirakc_host, $opt_mirakc_port = v.split(":") }
 opts.parse!(ARGV)
 $log = Logger.new($opt_logfile || $stderr)
 $log.level = $opt_debug ? Logger::DEBUG : Logger::INFO

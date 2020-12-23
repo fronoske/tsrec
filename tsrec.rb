@@ -79,18 +79,20 @@ class Program
     @command = 
     case [@full_path.is_a?(String), $opt_pipe.is_a?(String)]
     when [true, true] # ファイル出力 & パイプあり
-      %Q!curl -sSL #{BASE_URL}/programs/#{@program_id}/stream | tee '#{@full_path} | #{$opt_pipe}'!
+      %Q!curl -sSL #{BASE_URL}/programs/#{@program_id}/stream | tee '#{@full_path}' | '#{$opt_pipe}'!
     when [true, false] # ファイル出力 & パイプなし
       %Q!curl -sSL #{BASE_URL}/programs/#{@program_id}/stream -o '#{@full_path}'!
     when [false, true] # ファイル出力なし & パイプあり
-      %Q!curl -sSL #{BASE_URL}/programs/#{@program_id}/stream | #{$opt_pipe}!
+      %Q!curl -sSL #{BASE_URL}/programs/#{@program_id}/stream | '#{$opt_pipe}'!
     else # [false, false]
       raise "予期しないエラー：@full_path も $opt_pipe も false"
     end
-    
-    # 番組情報は後で
+	if $opt_after_rec_command
+	  @command = "( #{@command} ) && ( #{$opt_after_rec_command} )"
+	end
+
     @env = {
-      "TSREC_TITLE" => @tilte,
+      "TSREC_TITLE" => @tilte.to_s,
       "TSREC_START_AT_Y" => @start_at.year.to_s,
       "TSREC_START_AT_M" => @start_at.month.to_s,
       "TSREC_START_AT_M2" => @start_at.strftime("%m"),
@@ -113,15 +115,34 @@ class Program
       "TSREC_END_AT_MIN2" => @end_at.strftime("%M"),
       "TSREC_DURATION_SEC" => @duration.to_s,
       "TSREC_PROGRAM_ID" => @program_id.to_s,
+      "TSREC_EVENT_ID" => @event_id.to_s,
       "TSREC_SERVICE_ID" => @service_id.to_s,
+      "TSREC_SERVICE_NAME" => @service_name.to_s,
+      "TSREC_SERVICE_CHANNEL" => @service_channel.to_s,
+      "TSREC_SERVICE_TYPE" => @service_type.to_s,
       "TSREC_NETWORK_ID" => @network_id.to_s,
-      "TSREC_DESC" => @desc,
-      "TSREC_EXTENDED" => @more_desc&.gsub("\n", "\\n"),
+      "TSREC_DESC" => @desc.to_s,
+      "TSREC_EXTENDED" => @extended.to_s.gsub("\n", "\\n"),
       "TSREC_OUT_PATH" => @full_path.to_s,
-      "TSREC_OUT_PATH_BASE" => @full_path.to_s.gsub(/\.+?$/, ''),
+      "TSREC_OUT_PATH_BASE" => @full_path.to_s.gsub(/\..+?$/, ''),
       "TSREC_OUT_DIR" => $out_dir.to_s,
       "TSREC_OUT_BASE" => File.basename(@file_name, ".*"),
       "TSREC_OUT_EXT" => File.extname(@file_name),
+      "TSREC_VIDEO_STREAM" => @video_sc.to_s,
+      "TSREC_VIDEO_COMPONENT"  => @video_ct.to_s,
+      "TSREC_VIDEO_COMPONENT_S"  => @video_ct_s.to_s,
+      "TSREC_VIDEO_TYPE" => @video_type.to_s,
+      "TSREC_AUDIO_COMPONENT" => @audio_ct.to_s,
+      "TSREC_AUDIO_COMPONENT_S" => @audio_ct_s.to_s,
+      "TSREC_AUDIO_RATE" => @audio_rate.to_s,
+      "TSREC_GENRE1"    => @genres_s.dig(0, 0).to_s,
+      "TSREC_GENRE1SUB" => @genres_s.dig(0, 1).to_s,
+      "TSREC_GENRE2"    => @genres_s.dig(1, 0).to_s,
+      "TSREC_GENRE2SUB" => @genres_s.dig(1, 1).to_s,
+      "TSREC_GENRE3"    => @genres_s.dig(2, 0).to_s,
+      "TSREC_GENRE3SUB" => @genres_s.dig(2, 1).to_s,
+      "TSREC_GENRE4"    => @genres_s.dig(3, 0).to_s,
+      "TSREC_GENRE4SUB" => @genres_s.dig(3, 1).to_s,
     }
   end
   
@@ -257,33 +278,53 @@ def main
   end
   program = Program.new(program_hash)
   program.wait_rec_start
-  begin
-    program.do_rec
-    process_list << {pid: program.pid, end_at: program.end_at}
-    process_list.select!{|process| File.exist?("/proc/#{process[:pid]}")}
-    zombees = process_list.select{|process| process[:end_at] + 10 < Time.now}
-    $log.warn "録画プロセスが終了時刻になっても録画を終了していません [PID: #{zombees.join(',')}]" unless zombees.empty?
-  rescue
-    $stderr.puts "[FATAL] curlコマンドの実行に失敗しました"
-    $stderr.puts $!
-    $stderr.puts $!.backtrace
-    nil
-  end
+  program.generate_program_info
+  program.do_rec
+  process_list << {pid: program.pid, end_at: program.end_at}
+  process_list.select!{|process| File.exist?("/proc/#{process[:pid]}")}
+  zombees = process_list.select{|process| process[:end_at] + 10 < Time.now}
+  $log.warn "録画プロセスが終了時刻になっても録画を終了していません [PID: #{zombees.join(',')}]" unless zombees.empty?
   program.wait_rec_end
 end
 
 def get_services
-  unless File.exist?("channels.json")
-    system("curl #{BASE_URL}/channels -o channels.json")
+  channels_json = File.expand_path("../channels.json", $0)
+  unless File.exist?(channels_json)
+    system("curl #{BASE_URL}/channels -o #{channels_json}")
   end
-  channels = JSON.parse(open("channels.json", "r:utf-8").read, symbolize_names: true)
+  channels = JSON.parse(open(channels_json, "r:utf-8").read, symbolize_names: true)
   channels.map{|c|
-	type = c[:type]
-	ch   = c[:channel]
+  type = c[:type]
+  ch   = c[:channel]
     c[:services].map{|s| s.merge({type: type, channel: ch})}
-  }.flatten
+  }.flatten.uniq.sort_by{|s| [['GR', 'BS', 'CS'].index(s[:type]), s[:serviceId]]}
 rescue
+  $log.warn "サービス一覧の取得に失敗しました。続行します。"
   []
+end
+
+def show_services
+  w = -> s { s.codepoints.inject(0) { |a, e| a + (e < 256 ? 1 : 2) } }
+  type = $opt_show_services_list.to_s.upcase[/GR|BS|CS|ALL/]
+  puts "     サービス名      サービスID  タイプ  物理ch"
+  SERVICES.select{|sv| type == 'ALL' || sv[:type] == type}.each do |sv|
+    name = sv[:name]
+    sid  = sv[:serviceId].to_s
+    type = sv[:type]
+    ch   = sv[:channel].to_s
+    padding = " " * (22 - w[name])
+    puts "%s  %5s      %2s    %6s" % ["#{name}#{padding}", sid, type, ch]
+  end
+  puts
+end
+
+def get_arib_table
+  arib_yaml = File.expand_path("../arib-constants.yaml", $0)
+  if File.exist?(arib_yaml)
+    YAML.load_file(arib_yaml)
+  else
+    {}
+  end
 end
 
 ###########################
@@ -319,9 +360,11 @@ opts.on("-o outDir",           String,  "Output directory"){|v| $opt_out_dir = v
 opts.on("-f outfileFormat",    String,  "out file format (default: #{DEFAULT_OUTFILE_FORMAT})"){|v| $opt_outfile_format = v }
 opts.on("-j",                           "Output JSON file instad of text file"){|v| $opt_output_json = v }
 opts.on("-p command",          String,  "pipe command"){|v| $opt_pipe = v }
+opts.on("-a command",          String,  "command after each rec"){|v| $opt_after_rec_command = v }
 opts.on("-d",                           "debug mode"){|v| $opt_debug = v }
 opts.on("-l logfile",          String,  "output log (default: stderr)"){|v| $opt_logfile = v }
 opts.on("-u host:port",        String,  "mirakc host:port (default: #{DEFAULT_MIRAKC_HOST}:#{DEFAULT_MIRAKC_PORT})"){|v| $opt_mirakc_host, $opt_mirakc_port = v.split(":") }
+opts.on("-S [GR|BS|CS|ALL]",   String,  "Show services list"){|v| $opt_show_services_list = v }
 opts.parse!(ARGV)
 $log = Logger.new($opt_logfile || $stderr)
 $log.level = $opt_debug ? Logger::DEBUG : Logger::INFO

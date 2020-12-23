@@ -49,10 +49,27 @@ class Program
     @end_at = @start_at + @duration
     @end_at_s = @end_at.strftime("%Y-%m-%d %H:%M:%S")
     @program_id = hash[:id]
+    @event_id = hash[:eventId]
     @service_id = hash[:serviceId]
     @network_id = hash[:networkId]
+    @service_name = SERVICE[:name]
+    @service_channel = SERVICE[:channel]
+    @service_type    = SERVICE[:type]
     @desc       = hash[:description]
-    @more_desc  = hash[:extended]&.map{|k, v| "#{k}：#{v}"}&.join("\n")
+    @extended   = hash[:extended]&.map{|k, v| "#{k}：#{v}"}&.join("\n")
+    
+    @video_sc   = hash.dig(:video, :streamContent)
+    @video_ct   = hash.dig(:video, :componentType)
+    @video_ct_s = ARIB_TABLE.dig("ComponentType", @video_sc, @video_ct)
+    @video_type = hash.dig(:video, :type).upcase
+    @audio_ct   = hash.dig(:audio, :componentType)
+    @audio_ct_s = ARIB_TABLE.dig("ComponentType", 2, @audio_ct)
+    @audio_rate = hash.dig(:audio, :samplingRate)
+    @genres     = hash.dig(:genres).map{|g| [ g[:lv1], g[:lv2] ]}
+    @genres_s   = @genres.map{|g| [ARIB_TABLE.dig("ContentType", g[0], "name"), ARIB_TABLE.dig("ContentType", g[0], g[1])]}
+    
+    show_info if $opt_debug
+    
     unless set_path
       $log.error "出力パスを設定できませんでした: #{@full_path}"
       abort
@@ -149,12 +166,70 @@ class Program
     sleep(sec_to_rec_end)
   end
   
+  def generate_program_info
+	return nil if @full_path
+	attrs = %s(@title @event_id @network_id @service_id @service_name @service_channel @service_type @start_at @end_at @duration
+	@video_ct @video_ct_s @video_type @audio_ct @audio_ct_s @audio_rate @genres_s @desc @extended)
+    if $opt_output_json
+	  obj = attrs.map{|att| val = self.instance_variable_get(att); [key,val]}.to_h
+	  json_body = JSON.pretty_generate(obj)
+	  json_path = @full_path.gsub(/\..+?$/, '.json')
+	  open(json_path, "w"){|f| f.puts json_body}
+    else
+	  lines = []
+      lines << "#{to_j(@start_at, @end_at)} (#{sec2hhmmss(@duration)})"
+	  lines << "#{@service_name}"
+	  lines << "#{@title}"
+	  lines << ""
+	  lines << "#{@desc}"
+	  lines << ""
+	  lines << "【詳細情報】"
+	  lines << "#{@extended}"
+	  lines << ""
+	  lines << "【ジャンル】"
+	  lines << @genres_s.map{|genre_mainsub| genre_mainsub.join(" - ")}.join("\n")
+	  lines << ""
+	  lines << "映像：#{@video_ct_s}"
+	  lines << "音声：#{@audio_ct_s}"
+	  lines << "サンプリングレート：#{@audio_rate}"
+	  lines << ""
+	  lines << "NetworkId: #{@network_id}"
+	  lines << "ServiceId: #{@service_id}"
+	  lines << "EventId: #{@event_id}"
+      text_body = lines.map(&:strip).join("\n")
+	  text_path = @full_path.gsub(/\..+?$/, '.txt')
+	  open(text_path, "w"){|f| f.puts text_body}
+    end
+
+    def to_j(start_at, end_at)
+	  wday_j = "日月火水木金土"[start_at.wday]
+	  start_s = start_at.strftime("%y/%m/%d(#{wday_j}) %H:%M") 
+	  end_s = end_at.strftime("%H:%M") 
+	  if start_at.day != end_at.day
+	    if end_at.hour < 6
+	      end_s.gsub!(/^\d\d:/, "#{end_at.hour + 24}:")
+		else
+	      wday_j = "日月火水木金土"[end_at.wday]
+		  end_s = end_at.strftime("%y/%m/%d(#{wday_j}) %H:%M")
+		end
+      end
+      "#{start_s}～#{end_s}" 
+	end
+  end
+  
   # Windows のファイル名に使用できない文字を全角にする。「！」は使用できるが「？」とのバランスのため。
   def sanitize(str)
     str.tr('\\\/:*!?"<>|', '￥／：＊！？＜＞｜')
   end 
   def sec2hhmmss(sec)
     "%02d:%02d:%02d" % [sec/3600, (sec%3600)/60, sec%60]
+  end
+  
+  def show_info
+    self.pretty_print_instance_variables.each do |_var|
+      _val = instance_variable_get(_var)
+      $log.debug "<#{_var}> #{_val}"
+    end
   end
 end
 
@@ -242,6 +317,7 @@ opts.on("-s serviceId",        Integer, "service ID"){|v| $opt_service_id = v}
 opts.on("-m marginSec",        Integer, "margin sec to rec (default: #{DEFAULT_MARGIN_SEC})"){|v| $opt_margin_sec = v }
 opts.on("-o outDir",           String,  "Output directory"){|v| $opt_out_dir = v}
 opts.on("-f outfileFormat",    String,  "out file format (default: #{DEFAULT_OUTFILE_FORMAT})"){|v| $opt_outfile_format = v }
+opts.on("-j",                           "Output JSON file instad of text file"){|v| $opt_output_json = v }
 opts.on("-p command",          String,  "pipe command"){|v| $opt_pipe = v }
 opts.on("-d",                           "debug mode"){|v| $opt_debug = v }
 opts.on("-l logfile",          String,  "output log (default: stderr)"){|v| $opt_logfile = v }

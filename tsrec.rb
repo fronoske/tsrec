@@ -30,6 +30,7 @@ https://github.com/youzaka/ariblib/blob/488ad38bbc54dc2544391d120a95f75dfcf32902
 https://350ml.net/labo/iepg2.html
 =end
 
+UA = 'tsrec'
 DEFAULT_MIRAKC_HOST = 'localhost'
 DEFAULT_MIRAKC_PORT = 40772
 DEFAULT_MARGIN_SEC = 5
@@ -269,7 +270,7 @@ end
 ##################
 def get_future_programs(service_id, time=Time.now)
   unix_time = time.to_i
-  programs = JSON.parse(URI.open("#{BASE_URL}/programs", "r:utf-8").read, symbolize_names: true)
+  programs = JSON.parse(URI.open("#{BASE_URL}/programs", "r:utf-8", nil, {"User-Agent" => UA}).read, symbolize_names: true)
   programs_by_service = programs.select{|prog| prog[:serviceId] == service_id}
   future_programs = programs_by_service.select{|prog| prog[:startAt] > unix_time * 1000}
   future_programs.reject!{|prog| prog[:name] =~ Regexp.union(*RE_BLACK_LIST)}
@@ -385,6 +386,7 @@ $opt_outfile_format ||= DEFAULT_OUTFILE_FORMAT
 $opt_mirakc_host    ||= DEFAULT_MIRAKC_HOST
 $opt_mirakc_port    ||= DEFAULT_MIRAKC_PORT
 
+BASE_URL = "http://#{$opt_mirakc_host}:#{$opt_mirakc_port}/api"
 ARIB_TABLE = get_arib_table
 SERVICES = get_services
 
@@ -405,7 +407,6 @@ if $opt_out_dir.nil? && $opt_pipe.nil?
   abort "[FATAL] -o か -p のどちらかは必ず指定する必要があります\n\n"
 end
 
-BASE_URL = "http://#{$opt_mirakc_host}:#{$opt_mirakc_port}/api"
 SERVICE = SERVICES.find{|s| s[:serviceId] == $opt_service_id}
 if SERVICE
   $log.info "-" * 100

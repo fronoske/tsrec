@@ -4,6 +4,7 @@
 # TODO
 # 番組情報.json の出力（番組情報の数値を文字列化）
 # Ctrl+C のトラップ（正常終了させる）
+# サービスIDでなくチャンネル指定で複数局録画
 
 require 'open-uri'
 require 'json'
@@ -36,6 +37,9 @@ DEFAULT_OUTFILE_FORMAT = "%Y%m%d_%H%M %%T.ts"
 MARGIN_SEC_FOR_NEXT_REC = 60 # 番組終了 n 秒前に次の番組のEPG情報を取得する
 RE_BLACK_LIST = [/^放送(休止|終了)$/, /^休止$/]
 
+##################
+# Classes
+##################
 class Program
   attr_accessor :env, :pid, :end_at
   
@@ -71,8 +75,8 @@ class Program
     show_info if $opt_debug
     
     unless set_path
-      $log.error "出力パスを設定できませんでした: #{@full_path}"
-      abort
+      $log.error "[FATAL] 出力パスを設定できませんでした: #{@full_path}"
+      abort "[FATAL] 出力パスを設定できませんでした: #{@full_path}"
     end
     $log.debug "File: #{@file_name}"
     $log.debug "Path: #{@full_path}"
@@ -163,27 +167,32 @@ class Program
   # 録画を待機する
   def wait_rec_start
     sec_to_rec_start = [0, @rec_start_at - Time.now ].max
+    $log.info "次の番組の録画を準備します"
     $log.info "次の番組：#{@start_at_s}「#{@title}」（#{sec2hhmmss(@duration)}）"
     $log.info "録画時刻：#{@rec_start_at_s}"
-    $log.info "待ち時間：#{sec2hhmmss(sec_to_rec_start.to_i)}"
+    $log.info "録画を待機します（待ち時間：#{sec2hhmmss(sec_to_rec_start.to_i)}）"
     $log.debug "コマンド：#{@command}"
     sleep(sec_to_rec_start)
-    $log.info "録画を開始します"
   end
   
   # 録画を実行する
   def do_rec
     $log.debug @command
     @pid = spawn(@env, @command)
-    $log.info "Process ID: #{@pid}"
+    $log.info "録画を開始しました (Process ID: #{@pid})"
+  rescue
+    $log.error "[FATAL] curlコマンドの呼び出しに失敗しました。終了します。"
+    $log.error $!
+    $log.error $!.backtrace
+    abort "[FATAL] curlコマンドの呼び出しに失敗しました。終了します。"
   end
   
   # 録画終了の寸前まで待つ
   def wait_rec_end
     sec_to_rec_end = [0, $opt_margin_sec + @duration - MARGIN_SEC_FOR_NEXT_REC].max
-    $log.info "番組終了予定：#{@end_at_s}"
-    $log.info "終了#{MARGIN_SEC_FOR_NEXT_REC}秒前に次の録画を準備します"
-    $log.info "待ち時間：#{sec2hhmmss(sec_to_rec_end.to_i)}"
+    # $log.info "終了#{MARGIN_SEC_FOR_NEXT_REC}秒前に次の録画を準備します"
+    $log.info "現在の番組の終了予定：#{@end_at_s}"
+    $log.info "現在の番組の終了を待機します（待ち時間：#{sec2hhmmss(sec_to_rec_end.to_i)}）"
     sleep(sec_to_rec_end)
   end
   
@@ -254,6 +263,10 @@ class Program
   end
 end
 
+
+##################
+# Functions
+##################
 def get_future_programs(service_id, time=Time.now)
   unix_time = time.to_i
   programs = JSON.parse(URI.open("#{BASE_URL}/programs", "r:utf-8").read, symbolize_names: true)
@@ -263,19 +276,15 @@ def get_future_programs(service_id, time=Time.now)
   future_programs.sort_by!{|prog| prog[:startAt]}
   future_programs
 rescue
-  $stderr.puts "番組リストの取得に失敗しました"
-  $stderr.puts $!
-  $stderr.puts $!.backtrace
-  []
+  $Log.error "[FATAL] 番組リストの取得に失敗しました。終了します。"
+  $Log.error $!
+  $Log.error $!.backtrace
+  abort "[FATAL] 番組リストの取得に失敗しました。終了します。"
 end
 
 def main
   process_list = []
   program_hash = get_future_programs($opt_service_id)&.first
-  if program_hash.nil?
-    $stderr.puts "[ERROR] Failed to get the next program"
-    abort
-  end
   program = Program.new(program_hash)
   program.wait_rec_start
   program.generate_program_info
@@ -375,29 +384,41 @@ $opt_margin_sec     ||= DEFAULT_MARGIN_SEC
 $opt_outfile_format ||= DEFAULT_OUTFILE_FORMAT
 $opt_mirakc_host    ||= DEFAULT_MIRAKC_HOST
 $opt_mirakc_port    ||= DEFAULT_MIRAKC_PORT
+
+ARIB_TABLE = get_arib_table
+SERVICES = get_services
+
+if $opt_show_services_list
+  show_services
+  exit 0
+end
+
 if $opt_service_id.nil?
   puts opts.help
   puts
-  abort "サービスIDの指定は必ず必要です\n\n"
+  abort "[FATAL] サービスIDの指定は必ず必要です\n\n"
 end
+
 if $opt_out_dir.nil? && $opt_pipe.nil?
   puts opts.help
   puts
-  abort "-o か -p のどちらかは必ず指定する必要があります\n\n"
+  abort "[FATAL] -o か -p のどちらかは必ず指定する必要があります\n\n"
+end
+
+BASE_URL = "http://#{$opt_mirakc_host}:#{$opt_mirakc_port}/api"
+SERVICE = SERVICES.find{|s| s[:serviceId] == $opt_service_id}
+if SERVICE
+  $log.info "-" * 100
+  $log.info "#{SERVICE[:name]} (#{SERVICE[:type]}/#{SERVICE[:channel]}) を全録します"
+  $log.info "-" * 100
+else
+  $log.error "[FATAL] 指定されたサービスが見つかりません。終了します。"
+  abort "[FATAL] 指定されたサービスが見つかりません。終了します。"
 end
 
 if $opt_out_dir
   $opt_out_dir = File.expand_path($opt_out_dir)
   FileUtils.mkdir_p($opt_out_dir) if $opt_out_dir && !File.directory?($opt_out_dir)
-end
-
-BASE_URL = "http://#{$opt_mirakc_host}:#{$opt_mirakc_port}/api"
-SERVICES = get_services
-SERVICE = SERVICES.find{|s| s[:serviceId] == $opt_service_id}
-if SERVICE
-  $log.info "#{SERVICE[:name]} (#{SERVICE[:type]}/#{SERVICE[:channel]}) を全録します"
-else
-  abort "Failed to get target service"
 end
 
 while(true) do

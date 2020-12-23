@@ -270,16 +270,16 @@ end
 ##################
 def get_future_programs(service_id, time=Time.now)
   unix_time = time.to_i
-  programs = JSON.parse(URI.open("#{BASE_URL}/programs", "r:utf-8", nil, {"User-Agent" => UA}).read, symbolize_names: true)
+  programs = JSON.parse(URI.open("#{BASE_URL}/programs", "r:utf-8", {"User-Agent" => UA}).read, symbolize_names: true)
   programs_by_service = programs.select{|prog| prog[:serviceId] == service_id}
   future_programs = programs_by_service.select{|prog| prog[:startAt] > unix_time * 1000}
   future_programs.reject!{|prog| prog[:name] =~ Regexp.union(*RE_BLACK_LIST)}
   future_programs.sort_by!{|prog| prog[:startAt]}
   future_programs
 rescue
-  $Log.error "[FATAL] 番組リストの取得に失敗しました。終了します。"
-  $Log.error $!
-  $Log.error $!.backtrace
+  $log.error "[FATAL] 番組リストの取得に失敗しました。終了します。"
+  $log.error $!
+  $log.error $!.backtrace
   abort "[FATAL] 番組リストの取得に失敗しました。終了します。"
 end
 

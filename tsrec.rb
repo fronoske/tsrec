@@ -198,7 +198,7 @@ class Program
   end
   
   def generate_program_info
-    return nil if @full_path
+    return nil unless @full_path
     attrs = %s(@title @event_id @network_id @service_id @service_name @service_channel @service_type @start_at @end_at @duration
       @video_ct @video_ct_s @video_type @audio_ct @audio_ct_s @audio_rate @genres_s @desc @extended)
     if $opt_output_json

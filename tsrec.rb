@@ -92,9 +92,9 @@ class Program
     else # [false, false]
       raise "予期しないエラー：@full_path も $opt_pipe も false"
     end
-	if $opt_after_rec_command
-	  @command = "( #{@command} ) && ( #{$opt_after_rec_command} )"
-	end
+    if $opt_after_rec_command
+      @command = "( #{@command} ) && ( #{$opt_after_rec_command} )"
+    end
 
     @env = {
       "TSREC_TITLE" => @tilte.to_s,
@@ -198,54 +198,54 @@ class Program
   end
   
   def generate_program_info
-	return nil if @full_path
-	attrs = %s(@title @event_id @network_id @service_id @service_name @service_channel @service_type @start_at @end_at @duration
-	@video_ct @video_ct_s @video_type @audio_ct @audio_ct_s @audio_rate @genres_s @desc @extended)
+    return nil if @full_path
+    attrs = %s(@title @event_id @network_id @service_id @service_name @service_channel @service_type @start_at @end_at @duration
+      @video_ct @video_ct_s @video_type @audio_ct @audio_ct_s @audio_rate @genres_s @desc @extended)
     if $opt_output_json
-	  obj = attrs.map{|att| val = self.instance_variable_get(att); [key,val]}.to_h
-	  json_body = JSON.pretty_generate(obj)
-	  json_path = @full_path.gsub(/\..+?$/, '.json')
-	  open(json_path, "w"){|f| f.puts json_body}
+      obj = attrs.map{|att| val = self.instance_variable_get(att); [key,val]}.to_h
+      json_body = JSON.pretty_generate(obj)
+      json_path = @full_path.gsub(/\..+?$/, '.json')
+      open(json_path, "w"){|f| f.puts json_body}
     else
-	  lines = []
+      lines = []
       lines << "#{to_j(@start_at, @end_at)} (#{sec2hhmmss(@duration)})"
-	  lines << "#{@service_name}"
-	  lines << "#{@title}"
-	  lines << ""
-	  lines << "#{@desc}"
-	  lines << ""
-	  lines << "【詳細情報】"
-	  lines << "#{@extended}"
-	  lines << ""
-	  lines << "【ジャンル】"
-	  lines << @genres_s.map{|genre_mainsub| genre_mainsub.join(" - ")}.join("\n")
-	  lines << ""
-	  lines << "映像：#{@video_ct_s}"
-	  lines << "音声：#{@audio_ct_s}"
-	  lines << "サンプリングレート：#{@audio_rate}"
-	  lines << ""
-	  lines << "NetworkId: #{@network_id}"
-	  lines << "ServiceId: #{@service_id}"
-	  lines << "EventId: #{@event_id}"
+      lines << "#{@service_name}"
+      lines << "#{@title}"
+      lines << ""
+      lines << "#{@desc}"
+      lines << ""
+      lines << "【詳細情報】"
+      lines << "#{@extended}"
+      lines << ""
+      lines << "【ジャンル】"
+      lines << @genres_s.map{|genre_mainsub| genre_mainsub.join(" - ")}.join("\n")
+      lines << ""
+      lines << "映像：#{@video_ct_s}"
+      lines << "音声：#{@audio_ct_s}"
+      lines << "サンプリングレート：#{@audio_rate}"
+      lines << ""
+      lines << "NetworkId: #{@network_id}"
+      lines << "ServiceId: #{@service_id}"
+      lines << "EventId: #{@event_id}"
       text_body = lines.map(&:strip).join("\n")
-	  text_path = @full_path.gsub(/\..+?$/, '.txt')
-	  open(text_path, "w"){|f| f.puts text_body}
+      text_path = @full_path.gsub(/\..+?$/, '.txt')
+      open(text_path, "w"){|f| f.puts text_body}
     end
 
     def to_j(start_at, end_at)
-	  wday_j = "日月火水木金土"[start_at.wday]
-	  start_s = start_at.strftime("%y/%m/%d(#{wday_j}) %H:%M") 
-	  end_s = end_at.strftime("%H:%M") 
-	  if start_at.day != end_at.day
-	    if end_at.hour < 6
-	      end_s.gsub!(/^\d\d:/, "#{end_at.hour + 24}:")
-		else
-	      wday_j = "日月火水木金土"[end_at.wday]
-		  end_s = end_at.strftime("%y/%m/%d(#{wday_j}) %H:%M")
-		end
+      wday_j = "日月火水木金土"[start_at.wday]
+      start_s = start_at.strftime("%y/%m/%d(#{wday_j}) %H:%M") 
+      end_s = end_at.strftime("%H:%M") 
+      if start_at.day != end_at.day
+        if end_at.hour < 6
+          end_s.gsub!(/^\d\d:/, "#{end_at.hour + 24}:")
+	else
+          wday_j = "日月火水木金土"[end_at.wday]
+          end_s = end_at.strftime("%y/%m/%d(#{wday_j}) %H:%M")
+        end
       end
       "#{start_s}～#{end_s}" 
-	end
+    end
   end
   
   # Windows のファイル名に使用できない文字を全角にする。「！」は使用できるが「？」とのバランスのため。

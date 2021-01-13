@@ -2,10 +2,10 @@
 #;;; -*- coding: utf-8; tab-width: 2; -*-
 
 # TODO
-# Ctrl+C のトラップ（正常終了させる）
-# サービスIDでなくチャンネル指定で複数局録画 → 無理っぽい
-# tsrecコントロールコマンド
+# tsrec status または ps で現在の状況を表示する
+# outdir をカスタム化
 # SQLiteにEPG保存し、無視条件を SQL で指定できるようにする
+# サービスIDでなくチャンネル指定で複数局録画 → 無理っぽい
 
 require 'open-uri'
 require 'json'
@@ -14,9 +14,13 @@ require 'logger'
 require 'optparse'
 require 'fileutils'
 require 'tmpdir'
+require 'time'
 require 'yaml'
 require 'pry'
 
+SCRIPT_PATH = File.expand_path($0)
+SCRIPT_NAME = File.basename($0, ".*")
+PID_PATH = File.expand_path("../.pid", $0)
 TSREC_UA = "tsrec pid=#{Process.pid}"
 CURL_UA = "curl pid=#{Process.pid}"
 DEFAULT_MIRAKC_HOST = 'localhost'
@@ -31,7 +35,7 @@ RE_IGNORE_LIST = [/^放送(休止|終了)$/, /^休止$/]
 ##################
 module Mirakc
   def self.base_url
-    "http://#{$opt_mirakc_host}:#{$opt_mirakc_port}/api"
+    "http://#{$config.mirakc_host}:#{$config.mirakc_port}/api"
   end
   
   def self.read(url)
@@ -57,17 +61,155 @@ module Mirakc
   end
   
   def self.rec_command(program_id, full_path)
-    command = case [!$opt_no_ts, $opt_pipe_command.is_a?(String)]
+    command = case [!$config.no_ts, $config.pipe_command.is_a?(String)]
     when [true, true] # ファイル出力 & パイプあり
-      %Q!curl -sSL -A '#{CURL_UA}' #{self.url_program(program_id)}/stream | tee '#{full_path}' | #{$opt_pipe_command}!
+      %Q!curl -sSL -A '#{CURL_UA}' #{self.url_program(program_id)}/stream | tee '#{full_path}' | #{$config.pipe_command}!
     when [true, false] # ファイル出力 & パイプなし
       %Q!curl -sSL -A '#{CURL_UA}' #{self.url_program(program_id)}/stream -o '#{full_path}'!
     when [false, true] # ファイル出力なし & パイプあり
-      %Q!curl -sSL -A '#{CURL_UA}' #{self.url_program(program_id)}/stream | #{$opt_pipe_command}!
+      %Q!curl -sSL -A '#{CURL_UA}' #{self.url_program(program_id)}/stream | #{$config.pipe_command}!
     else # [true, false]
       raise "予期しないエラー： -n なのに -p がない"
     end
     command
+  end
+end
+
+class Config
+  attr_accessor :config_yml, :service_id, :margin_sec, :out_dir, :outfile_format, :no_ts, 
+  :output_json, :output_text, :pipe_command, :following_command, :logfile, :loglevel,
+  :mirakc_host, :mirakc_port, :subcommand, :section, :opts
+  
+  def initialize
+    @opts = OptionParser.new
+    parse_options
+  end
+  
+  def to_json
+    self.instance_variables.reject{|_var| _var == :@opts}.map{|_var|
+      [_var, instance_variable_get(_var)]
+    }.to_h.to_json
+  end
+  
+  def parse_options
+    @opts.banner = "USAGE: #{$0} (start|stop|status|ps|list) [section] [options...]"
+    @opts.on("-c config.yml",       String,    "configuration file (default: #{SCRIPT_NAME}.yml)"){|v| @config_yml = v}
+    @opts.on("-s serviceId",        Integer,   "service ID"){|v| @service_id = v}
+    @opts.on("-m marginSec",        Numeric,   "margin sec to rec [0-15] (default: #{DEFAULT_MARGIN_SEC})"){|v| @margin_sec = v }
+    @opts.on("-o outDir",           String,    "output directory (default: $TEMP/tsrec"){|v| @out_dir = v}
+    @opts.on("-f outfileFormat",    String,    "TS file format (default: #{DEFAULT_OUTFILE_FORMAT})"){|v| @outfile_format = v }
+    @opts.on("-n",                  TrueClass, "not output TS file"){|v| @no_ts = v }
+    @opts.on("-j",                  TrueClass, "output program information JSON file"){|v| @output_json = v }
+    @opts.on("-t",                  TrueClass, "output program information TEXT file"){|v| @output_text = v }
+    @opts.on("-p command",          String,    "pipe command"){|v| @pipe_command = v }
+    @opts.on("-a command",          String,    "command following each rec"){|v| @following_command = v }
+    @opts.on("-l logfile",          String,    "output log (default: stdout)"){|v| @logfile = v }
+    @opts.on("-v loglevel",         String,    "loglevel [fatal(0)|error(1)|warn(2)|info(3)|debug(4)|max(5)] (default:info)"){|v| @loglevel = v }
+    @opts.on("-u host:port",        String,    "mirakurun/mirakc host:port (default: #{DEFAULT_MIRAKC_HOST}:#{DEFAULT_MIRAKC_PORT})"){|v| @mirakc_host, @mirakc_port = v.split(":") }
+    @opts.parse!(ARGV)
+    @subcommand = ARGV[0]
+    @section = ARGV[1]
+  end
+  
+  def check_config
+    load_config_from_yml
+    @margin_sec     ||= DEFAULT_MARGIN_SEC
+    @outfile_format ||= DEFAULT_OUTFILE_FORMAT
+    @mirakc_host    ||= DEFAULT_MIRAKC_HOST
+    @mirakc_port    ||= DEFAULT_MIRAKC_PORT
+    @out_dir        ||= File.join(Dir.tmpdir, "tsrec")
+    @out_dir = File.expand_path(@out_dir)
+    
+    $log = Logger.new(@logfile || $stdout)
+    $log.level = case @loglevel.to_s.downcase
+    when 'fatal', '0' then Logger::FATAL
+    when 'error', '1' then Logger::ERROR
+    when 'warn',  '2' then Logger::WARN
+    when 'debug', '4', 'max', '5' then Logger::DEBUG
+    else Logger::INFO
+    end
+    $log.formatter = proc{|severity, datetime, progname, message|
+      "[%s] [%s] %s\n" % [datetime.strftime('%H:%M:%S'), severity, message ]
+    }
+
+    mirakc_version = Mirakc::get_version
+    if mirakc_version
+      $log.debug "Mirakurun/Mirakc Version #{mirakc_version}"
+    else
+      abort "[FATAL] Mirakurun/Mirakcサーバーにアクセスできません"
+    end
+    
+    if @service_id.nil?
+      $stderr.puts opts.help
+      $stderr.puts
+      abort "[FATAL] サービスIDの指定は必ず必要です"
+    end
+  
+    if @margin_sec < 0 || 15 < @margin_sec
+      $stderr.puts opts.help
+      $stderr.puts
+      abort "[FATAL] marginSec は 0～15 で指定してください"
+    end
+  
+    if @no_ts && @pipe_command.nil?
+      $stderr.puts opts.help
+      $stderr.puts
+      abort "[FATAL] -n のときは -p を必ず指定する必要があります"
+    end
+  end
+  
+  # yaml から config をロードする。コマンドラインオプションで指定されていればそちらを優先する
+  def load_config_from_yml
+    @config_yml ||= File.expand_path("../#{SCRIPT_NAME}.yml", SCRIPT_PATH)
+    config_yaml = YAML.load_file(@config_yml)
+    if config_yaml[@section].nil?
+      abort "Section '#{@section}' not found in #{@config_yml}"
+    end
+    config = config_yaml["common"].to_h.merge(config_yaml[@section].to_h)
+    @service_id        ||= config["serviceId"]
+    @margin_sec        ||= config["marginSec"]
+    @out_dir           ||= config["outDir"]
+    @outfile_format    ||= config["outFileFormat"]
+    @no_ts             ||= config["noTS"]
+    @output_json       ||= config["outJson"]
+    @output_text       ||= config["outText"]
+    @pipe_command      ||= config["pipeCommand"]
+    @following_command ||= config["followingCommand"]
+    @logfile           ||= config["logFile"]
+    @loglevel          ||= config["logLevel"]
+    @mirakc_host       ||= config["server"]&.split(":")&.first
+    @mirakc_port       ||= config["server"]&.split(":")&.last
+    return true
+  rescue
+    abort "Faild to load section #{@section} in #{@config_yml}."
+  end
+  
+  def exec_subcommand
+    case @subcommand.to_s
+    when 'start'
+      if @section.nil?
+        $stderr.puts opts.help
+        abort "セクション名が必要です"
+      else
+        return
+      end
+    when 'stop'
+      if @section.nil?
+        $stderr.puts "You should specify name."
+        show_process_list(@section)
+      else
+        stop_process(@section)
+      end
+    when 'ps', 'status'
+      show_process_list(@section)
+    when 'list' # ここだけ第2引数（@section）は放送種別
+      services = get_services
+      show_services_list(services, @section)
+    else
+      $stderr.puts @opts.help
+      abort "サブコマンドが不正です"
+    end
+    exit
   end
 end
 
@@ -78,7 +220,7 @@ class Program
     @title = hash[:name]
     @start_at = Time.at(hash[:startAt]/1000)
     @start_at_s = @start_at.strftime("%Y-%m-%d %H:%M:%S")
-    @rec_start_at = @start_at - $opt_margin_sec
+    @rec_start_at = @start_at - $config.margin_sec
     @rec_start_at_s = @rec_start_at.strftime("%Y-%m-%d %H:%M:%S")
     @duration = hash[:duration] / 1000
     @end_at = @start_at + @duration
@@ -110,7 +252,7 @@ class Program
     # $log.debug "File: #{@file_name}"
     @command = Mirakc::rec_command(@program_id, @full_path)
     @env = get_tsrec_env
-    $log.debug JSON.pretty_generate(@env) if $opt_loglevel =~ /^(max|5)$/
+    $log.debug JSON.pretty_generate(@env) if $config.loglevel =~ /^(max|5)$/
     # show_info
   end
   
@@ -177,15 +319,19 @@ class Program
   end
   
   def set_path
-    format_base = File.basename($opt_outfile_format, ".*")
-    format_ext  = File.extname($opt_outfile_format)
+    format_base = File.basename($config.outfile_format, ".*")
+    format_ext  = File.extname($config.outfile_format)
     format_base  = "#{format_base}[rec=#{Time.now.strftime('%H%M')}]" if now_on_air?
+    @out_dir = @start_at.strftime($config.out_dir).gsub('%T', @title)
+    @out_dir = File.expand_path(@out_dir)
+    FileUtils.mkdir_p(@out_dir) unless File.directory?(@out_dir)
+    
     0.upto(999) do |idx|
       postfix = (idx == 0) ? "" : "(#{idx})"
       format = "#{format_base}#{postfix}#{format_ext}"
       @file_name = @start_at.strftime(format).gsub('%T', @title)
       @file_name = sanitize(@file_name)
-      @full_path = File.join($opt_out_dir, @file_name)
+      @full_path = File.join(@out_dir, @file_name)
       return true unless File.exist?(@full_path)
     end
     return false
@@ -194,20 +340,20 @@ class Program
   # 録画を待機する
   def wait_rec_start
     sec_to_rec_start = [0, @rec_start_at - Time.now ].max
-    $log.info "次の番組の録画を準備します"
+    $log.info "現在の番組の終了直前．次の番組の録画を準備します"
     $log.info "次の番組：#{@start_at_s}「#{@title}」（#{sec2hhmmss(@duration)}）"
-    $log.info "録画時刻：#{@rec_start_at_s}"
-    $log.info "録画を待機します（待ち時間：#{sec2hhmmss(sec_to_rec_start.to_i)}）"
-    $log.debug "コマンド：#{@command}"
+    $log.info "録画を待機します（録画開始時刻：#{@rec_start_at_s}．待ち時間：#{sec2hhmmss(sec_to_rec_start.to_i)}）"
+    # $log.debug "コマンド：#{@command}"
     sleep(sec_to_rec_start)
   end
   
   # 録画を実行する
   def do_rec
     @pid = spawn(@env, @command)
+    # $log.info "番組開始 #{$config.margin_sec} 秒前．録画を開始しました (pid #{@pid})"
     $log.info "録画を開始しました (pid #{@pid})"
     $log.debug @command
-    $log.debug "Path: #{@full_path}"
+    # $log.debug "Path: #{@full_path}"
   rescue
     $log.error "[FATAL] curlコマンドの呼び出しに失敗しました。終了します。"
     $log.error $!
@@ -219,14 +365,13 @@ class Program
   def wait_rec_end
     sec_to_rec_end = [0, @end_at - MARGIN_SEC_FOR_NEXT_REC - Time.now].max
     # $log.info "終了#{MARGIN_SEC_FOR_NEXT_REC}秒前に次の録画を準備します"
-    $log.info "現在の番組の終了予定：#{@end_at_s}"
-    $log.info "現在の番組の終了を待機します（待ち時間：#{sec2hhmmss(sec_to_rec_end.to_i)}）"
+    $log.info "現在の番組の終了を待機します（終了予定：#{@end_at_s}．待ち時間：#{sec2hhmmss(sec_to_rec_end.to_i)}）"
     sleep(sec_to_rec_end)
   end
   
   def generate_program_info
     return nil unless @full_path
-    if $opt_output_json
+    if $config.output_json
       hash = @env.merge({"TSREC_EXTENDED" => @extended.to_s})
       hash.delete_if{|k, v| k.match?(/TSREC_(START|END)_AT_[^W]/)}
       hash.transform_keys!{|k| k[/TSREC_(.+)$/, 1]}
@@ -234,7 +379,7 @@ class Program
       json_path = @full_path.gsub(/\..+?$/, '.json')
       open(json_path, "w"){|f| f.puts json_body}
     end
-    if $opt_output_text
+    if $config.output_text
       lines = []
       lines << "#{to_j(@start_at, @end_at)} (#{sec2hhmmss(@duration)})"
       lines << "#{@service_name}"
@@ -290,11 +435,6 @@ class Program
     str.tr('\\\/:*!?"<>|', '￥／：＊！？＜＞｜')
   end 
 
-  # 秒を時分秒に変換する
-  def sec2hhmmss(sec)
-    "%02d:%02d:%02d" % [sec/3600, (sec%3600)/60, sec%60]
-  end
-
   # インスタンス変数とその値をDebugログに出力する
   def show_info
     self.pretty_print_instance_variables.each do |_var|
@@ -307,114 +447,9 @@ end
 ##################
 # Functions
 ##################
-def parse_config(yaml_path, section)
-  $stderr.puts "Loading section #{section} in #{yaml_path}..."
-  config = YAML.load_file(yaml_path)
-  config = config["common"].to_h.merge(config[section].to_h)
-  $opt_service_id        ||= config["serviceId"]
-  $opt_margin_sec        ||= config["marginSec"]
-  $opt_out_dir           ||= config["outDir"]
-  $opt_outfile_format    ||= config["outFileFormat"]
-  $opt_no_ts             ||= config["noTS"]
-  $opt_output_json       ||= config["outJson"]
-  $opt_output_text       ||= config["outText"]
-  $opt_pipe_command      ||= config["pipeCommand"]
-  $opt_following_command ||= config["followingCommand"]
-  $opt_logfile           ||= config["logFile"]
-  $opt_loglevel          ||= config["logLevel"]
-  $opt_mirakc_host       ||= config["server"]&.split(":")&.first
-  $opt_mirakc_port       ||= config["server"]&.split(":")&.last
-rescue
-  $stderr.puts "[SKIP] Faild to load section #{section} in #{yaml_path}."
-end
-
-def parse_options()
-  opts = OptionParser.new
-  opts.define_tail <<EOT
-
-サービス名  NetID  サービスID 物理ch
-NHK総合1    32736     1024    27ch
-NHK総合2    32736     1025    27ch
-Eテレ1      32737     1032    26ch
-Eテレ3      32737     1034    26ch
-tvk1        32375    24632    18ch
-tvk2        32375    24633    18ch
-tvk3        32375    24634    18ch
-日テレ      32738     1040    25ch
-テレビ朝日  32741     1064    24ch
-TBS         32739     1048    22ch
-テレビ東京  32742     1072    23ch
-フジテレビ  32740     1056    21ch
-TOKYO MX1   32391    23608    16ch
-TOKYO MX2   32391    23610    16ch
-イッツコム  32383    24697    30ch
-
-NHK BS1         4      101  BS15_0
-BSプレミアム    4      103  BS03_1
-
-EOT
-  opts.on("-s serviceId",        Integer,   "service ID"){|v| $opt_service_id = v}
-  opts.on("-m marginSec",        Numeric,   "margin sec to rec [0-15] (default: #{DEFAULT_MARGIN_SEC})"){|v| $opt_margin_sec = v }
-  opts.on("-o outDir",           String,    "output directory (default: $TEMP/tsrec"){|v| $opt_out_dir = v}
-  opts.on("-f outfileFormat",    String,    "TS file format (default: #{DEFAULT_OUTFILE_FORMAT})"){|v| $opt_outfile_format = v }
-  opts.on("-n",                  TrueClass, "not output TS file"){|v| $opt_no_ts = v }
-  opts.on("-j",                  TrueClass, "output program information JSON file"){|v| $opt_output_json = v }
-  opts.on("-t",                  TrueClass, "output program information TEXT file"){|v| $opt_output_text = v }
-  opts.on("-p command",          String,    "pipe command"){|v| $opt_pipe_command = v }
-  opts.on("-a command",          String,    "command following each rec"){|v| $opt_following_command = v }
-  opts.on("-l logfile",          String,    "output log (default: stdout)"){|v| $opt_logfile = v }
-  opts.on("-v loglevel",         String,    "loglevel [fatal(0)|error(1)|warn(2)|info(3)|debug(4)|max(5)] (default:info)"){|v| $opt_loglevel = v }
-  opts.on("-u host:port",        String,    "mirakurun/mirakc host:port (default: #{DEFAULT_MIRAKC_HOST}:#{DEFAULT_MIRAKC_PORT})"){|v| $opt_mirakc_host, $opt_mirakc_port = v.split(":") }
-  opts.on("-S [GR|BS|CS|ALL]",   String,    "Show services list"){|v| $opt_show_services_list = v }
-  opts.parse!(ARGV)
-  if ARGV[0] && ARGV[1]
-    parse_config(ARGV[0], ARGV[1])
-  end
-  $log = Logger.new($opt_logfile || $stdout)
-  $log.level = case $opt_loglevel.to_s.downcase
-  when 'fatal', '0' then Logger::FATAL
-  when 'error', '1' then Logger::ERROR
-  when 'warn',  '2' then Logger::WARN
-  when 'debug', '4', 'max', '5' then Logger::DEBUG
-  else Logger::INFO
-  end
-  $log.formatter = proc{|severity, datetime, progname, message|
-    "[%s] [%s] %s\n" % [datetime.strftime('%H:%M:%S'), severity, message ]
-  }
-  $opt_margin_sec     ||= DEFAULT_MARGIN_SEC
-  $opt_outfile_format ||= DEFAULT_OUTFILE_FORMAT
-  $opt_mirakc_host    ||= DEFAULT_MIRAKC_HOST
-  $opt_mirakc_port    ||= DEFAULT_MIRAKC_PORT
-  $opt_out_dir        ||= File.join(Dir.tmpdir, "tsrec")
-  $opt_out_dir = File.expand_path($opt_out_dir)
-  FileUtils.mkdir_p($opt_out_dir) unless File.directory?($opt_out_dir)
-  
-  mirakc_version = Mirakc::get_version
-  if mirakc_version
-    $log.debug "Mirakurun/Mirakc Version #{mirakc_version}"
-  else
-    abort "[FATAL] Mirakurun/Mirakcサーバーにアクセスできません\n\n"
-  end
-  if $opt_show_services_list
-    services = get_services
-    show_services_list(services)
-    exit 0
-  end
-  unless 0 <= $opt_margin_sec && $opt_margin_sec <= 15
-    puts opts.help
-    puts
-    abort "[FATAL] marginSec は 0～15 で指定してください\n\n"
-  end
-  if $opt_service_id.nil?
-    puts opts.help
-    puts
-    abort "[FATAL] サービスIDの指定は必ず必要です\n\n"
-  end
-  if $opt_no_ts && $opt_pipe_command.nil?
-    puts opts.help
-    puts
-    abort "[FATAL] -n のときは -p を必ず指定する必要があります\n\n"
-  end
+# 秒を時分秒に変換する
+def sec2hhmmss(sec)
+  "%02d:%02d:%02d" % [sec/3600, (sec%3600)/60, sec%60]
 end
 
 def get_future_programs(service_id, time=Time.now)
@@ -438,7 +473,7 @@ end
 
 def get_services
   # channels.json はそうそう変わるものでないからローカルに保存しておく
-  channels_json = File.expand_path("../channels.json", $0)
+  channels_json = File.expand_path("../channels.json", SCRIPT_PATH)
   unless File.exist?(channels_json)
     open(channels_json, "wb"){|f| f.write Mirakc::read_channels }
   end
@@ -455,24 +490,8 @@ rescue
   abort
 end
 
-def show_services_list(services)
-  # 文字列の表示幅
-  w = -> s { s.codepoints.inject(0) { |a, e| a + (e < 256 ? 1 : 2) } }
-  type = $opt_show_services_list.to_s.upcase[/GR|BS|CS|ALL/]
-  puts "     サービス名      サービスID  タイプ  物理ch"
-  services.select{|sv| type == 'ALL' || sv[:type] == type}.each do |sv|
-    name = sv[:name]
-    sid  = sv[:serviceId].to_s
-    type = sv[:type]
-    ch   = sv[:channel].to_s
-    padding = " " * (22 - w[name])
-    puts "%s  %5s      %2s    %6s" % ["#{name}#{padding}", sid, type, ch]
-  end
-  puts
-end
-
 def get_arib_table
-  arib_yaml = File.expand_path("../arib-constants.yaml", $0)
+  arib_yaml = File.expand_path("../arib-constants.yaml", SCRIPT_PATH)
   if File.exist?(arib_yaml)
     YAML.load_file(arib_yaml)
   else
@@ -480,13 +499,106 @@ def get_arib_table
   end
 end
 
+###########################################
+# 録画以外のコマンド
+###########################################
+def show_services_list(services, target_type)
+  target_type = target_type.to_s.upcase
+  # 文字列の表示幅
+  w = -> s { s.codepoints.inject(0) { |a, e| a + (e < 256 ? 1 : 2) } }
+  puts "サービス名           サービスID  タイプ   物理ch"
+  services.select{|sv| target_type.empty? || target_type == 'ALL' || sv[:type] == target_type}.each do |sv|
+    id   = sv[:id]
+    name = sv[:name]
+    sid  = sv[:serviceId].to_s
+    type = sv[:type]
+    ch   = sv[:channel].to_s
+    padding = " " * (22 - w[name])
+    puts "%s  %5s      %2s    %6s" % ["#{name}#{padding}", sid, type, ch, id]
+  end
+  puts "サービス名           サービスID  タイプ   物理ch"
+  puts
+end
+
+=begin
+.pid のフォーマット
+PID<tab>section<tab>実行開始日時(ISO8601)<tab>引数リストJSON
+=end
+def get_process_list(target_section=nil)
+  info = []
+  unless File.size?(PID_PATH)
+    $stderr.puts "No #{SCRIPT_NAME} process"
+    abort
+  end
+  open(PID_PATH).readlines.each do |line|
+    if target_section.nil? || line.match?(/\t#{target_section}/)
+      pid, section, start_time, opts = line.chomp.split("\t")
+      info << { section: section, pid: pid.to_i, opts: opts, start_time: Time.iso8601(start_time)}
+    end
+  end
+  info
+end
+
+def show_process_list(section)
+  process_list = get_process_list(section)
+  if section
+    process = process_list.first
+    puts "[#{process[:section]}]"
+    puts "PID: #{process[:pid]}"
+    puts "Start Time: #{process[:start_time]}"
+    elapsed_sec = Time.now - process[:start_time]
+    puts "Duration: #{sec2hhmmss(elapsed_sec)}"
+    child_process_full =  `pgrep -P #{process[:pid]} -a`
+    puts "Child: #{child_process_full}"
+    puts "Config: #{JSON.pretty_generate JSON.parse(process[:opts])}"
+  else
+    puts "    PID      TIME  SECTION"
+    process_list.each do |_p|
+      elapsed_sec = Time.now - _p[:start_time]
+      puts "%7s  %8s  %-7s" % [_p[:pid], sec2hhmmss(elapsed_sec), _p[:section]]
+    end
+  end
+rescue
+  $stderr.puts "Failed to parse #{PID_PATH}"
+  $stderr.puts $!
+end
+
+def stop_process(section)
+  process_info = get_process_list(section).first
+  if process_info.nil?
+    abort "No such process"
+  end
+  pid = process_info[:pid]
+  pgid = Process.getpgid(pid)
+  # この pidDを殺す
+  Process.kill("-KILL", pgid)
+  $stderr.puts "Killed processes (pgrp #{pgid})\n"
+  lines = open(PID_PATH).lines.reject{|line| line.match?(/^#{pid}\t#{section}/)}
+  open(PID_PATH, "wb"){|f|
+    f.write lines.join("")
+  }
+end
+
 ###########################
 # Start Here
 ###########################
-parse_options
+$config = Config.new
+$config.exec_subcommand
+$config.check_config
+
+Process.daemon
+
+=begin
+.pid のフォーマット
+PID<tab>section<tab>実行開始日時(ISO8601)<tab>引数リストJSON
+=end
+open(PID_PATH, "a"){|f|
+  f.puts "#{Process.pid}\t#{$config.section}\t#{Time.now.iso8601}\t#{$config.to_json}"
+}
+
 ARIB_TABLE = get_arib_table
 SERVICES = get_services
-SERVICE = SERVICES.find{|s| s[:serviceId] == $opt_service_id}
+SERVICE = SERVICES.find{|s| s[:serviceId] == $config.service_id}
 if SERVICE
   $log.info "-" * 100
   $log.info "#{SERVICE[:name]} (#{SERVICE[:type]}/#{SERVICE[:channel]}) を全録します"
@@ -500,35 +612,37 @@ prev_curl_pid = nil
 prev_program_env = nil
 while(true) do
   # 現在（または次）の番組
-  programs_hash = get_future_programs($opt_service_id)
+  programs_hash = get_future_programs($config.service_id)
   if programs_hash.to_a.empty?
     $log.fatal "指定されたサービスの番組情報を取得できませんでした"
     abort
   end
   program = Program.new(programs_hash.first)
-  # 放送中でなければ（すなわち program が次の番組を指しているなら）放送開始 $opt_margin_sec 秒前まで待つ
+  # 放送中でなければ（すなわち program が次の番組を指しているなら）放送開始 $config.margin_sec 秒前まで待つ
   program.wait_rec_start unless program.now_on_air?
-  # ここに来るのは、放送中または放送開始 $opt_margin_sec 秒前
-  program.generate_program_info
+  
+  # ここに来るのは、放送中または放送開始 $config.margin_sec 秒前のはず
   # 録画開始
   program.do_rec
-  # 前の番組の終了を待つ
+  # 前の番組の録画プロセスの終了を待つ
   if prev_curl_pid
-    $log.info "前の番組の録画 (pid #{prev_curl_pid}) の終了を待ちます"
+    $log.info "前の番組の録画プロセス(pid #{prev_curl_pid}) の終了を待ちます"
     begin
       Process.waitpid(prev_curl_pid)
-      $log.info "前の番組の録画が正常終了しました (#{Process.last_status})"
+      $log.info "前の番組の録画プロセスが正常終了しました (#{Process.last_status})"
     rescue
-      $log.warn "前の番組の録画はすでに終了していました（異常終了？）"
+      $log.warn "前の番組の録画プロセスはすでに終了していました（異常終了？）"
     ensure
-      if $opt_following_command
-        pid = spawn(prev_program_env, $opt_following_command)
+      if $config.following_command
+        pid = spawn(prev_program_env, $config.following_command)
         $log.info "録画後コマンドを呼び出しました (pid #{pid})"
-        $log.debug $opt_following_command
+        $log.debug $config.following_command
         Process.detach(pid)
       end
     end
   end
+  # 番組情報を出力する
+  program.generate_program_info
   # 次の番組の録画開始後に現在の番組の録画の終了を検知するため、現在の番組の情報を保存する
   prev_curl_pid = program.pid
   prev_program_env = program.env.dup

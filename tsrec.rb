@@ -452,6 +452,11 @@ def sec2hhmmss(sec)
   "%02d:%02d:%02d" % [sec/3600, (sec%3600)/60, sec%60]
 end
 
+# 秒を日時分秒に変換する
+def sec2dddhhmmss(sec)
+  "%3dd %02d:%02d:%02d" % [sec/(3600*24), (sec%(3600*24))/3600, (sec%3600)/60, sec%60]
+end
+
 def get_future_programs(service_id, time=Time.now)
   unix_time = time.to_i # unix_time は sec、番組のタイムスタンプは msec
   programs = JSON.parse(Mirakc::read_programs, symbolize_names: true)
@@ -552,10 +557,10 @@ def show_process_list(section)
     puts "Child: #{child_process_full}"
     puts "Config: #{JSON.pretty_generate JSON.parse(process[:opts])}"
   else
-    puts "    PID      TIME  SECTION"
+    puts "    PID        TIME     SECTION"
     process_list.each do |_p|
       elapsed_sec = Time.now - _p[:start_time]
-      puts "%7s  %8s  %-7s" % [_p[:pid], sec2hhmmss(elapsed_sec), _p[:section]]
+      puts "%7s  %13s  %-7s" % [_p[:pid], sec2dddhhmmss(elapsed_sec), _p[:section]]
     end
   end
 rescue

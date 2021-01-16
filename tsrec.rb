@@ -2,8 +2,7 @@
 #;;; -*- coding: utf-8; tab-width: 2; -*-
 
 # TODO
-# tsrec status または ps で現在の状況を表示する
-# outdir をカスタム化
+# tsrec ps をもう少し見やすく
 # SQLiteにEPG保存し、無視条件を SQL で指定できるようにする
 # サービスIDでなくチャンネル指定で複数局録画 → 無理っぽい
 
@@ -28,7 +27,7 @@ DEFAULT_MIRAKC_PORT = 40772
 DEFAULT_MARGIN_SEC = 5
 DEFAULT_OUTFILE_FORMAT = "%Y%m%d_%H%M %%T.ts"
 MARGIN_SEC_FOR_NEXT_REC = 60 # 番組終了 n 秒前に次の番組のEPG情報を取得する
-RE_IGNORE_LIST = [/^放送(休止|終了)$/, /^休止$/]
+DEFAULT_IGNORE_LIST = ["^放送(休止|終了)$", "^休止$"]
 
 ##################
 # Classes
@@ -77,7 +76,7 @@ end
 
 class Config
   attr_accessor :config_yml, :service_id, :margin_sec, :out_dir, :outfile_format, :no_ts, 
-  :output_json, :output_text, :pipe_command, :following_command, :logfile, :loglevel,
+  :output_json, :output_text, :pipe_command, :following_command, :ignore_list, :logfile, :loglevel,
   :mirakc_host, :mirakc_port, :subcommand, :section, :opts
   
   def initialize
@@ -103,6 +102,7 @@ class Config
     @opts.on("-t",                  TrueClass, "output program information TEXT file"){|v| @output_text = v }
     @opts.on("-p command",          String,    "pipe command"){|v| @pipe_command = v }
     @opts.on("-a command",          String,    "command following each rec"){|v| @following_command = v }
+    @opts.on("-x ignoreList",       Array,     "skip rec if program tilte matches the regex (separeted by comma)"){|v| @ignore_list = v }
     @opts.on("-l logfile",          String,    "output log (default: stdout)"){|v| @logfile = v }
     @opts.on("-v loglevel",         String,    "loglevel [fatal(0)|error(1)|warn(2)|info(3)|debug(4)|max(5)] (default:info)"){|v| @loglevel = v }
     @opts.on("-u host:port",        String,    "mirakurun/mirakc host:port (default: #{DEFAULT_MIRAKC_HOST}:#{DEFAULT_MIRAKC_PORT})"){|v| @mirakc_host, @mirakc_port = v.split(":") }
@@ -120,7 +120,7 @@ class Config
     @out_dir        ||= File.join(Dir.tmpdir, "tsrec")
     @out_dir = File.expand_path(@out_dir)
     
-    $log = Logger.new(@logfile || $stdout)
+    $log = Logger.new(File.expand_path(@logfile) || $stdout)
     $log.level = case @loglevel.to_s.downcase
     when 'fatal', '0' then Logger::FATAL
     when 'error', '1' then Logger::ERROR
@@ -175,6 +175,8 @@ class Config
     @output_text       ||= config["outText"]
     @pipe_command      ||= config["pipeCommand"]
     @following_command ||= config["followingCommand"]
+    @ignore_list       ||= config["ignoreList"]
+    @ignore_list        += DEFAULT_IGNORE_LIST
     @logfile           ||= config["logFile"]
     @loglevel          ||= config["logLevel"]
     @mirakc_host       ||= config["server"]&.split(":")&.first
@@ -462,7 +464,8 @@ def get_future_programs(service_id, time=Time.now)
   programs = JSON.parse(Mirakc::read_programs, symbolize_names: true)
   programs_by_service = programs.select{|prog| prog[:serviceId] == service_id}
   future_programs = programs_by_service.reject{|prog| prog[:startAt] + prog[:duration] < unix_time * 1000}
-  future_programs.reject!{|prog| prog[:name] =~ Regexp.union(*RE_IGNORE_LIST)}
+  re_ignore_list = $config.ignore_list.map{|s| Regexp.new(s)}
+  future_programs.reject!{|prog| prog[:name] =~ Regexp.union(re_ignore_list)}
   future_programs.sort_by!{|prog| prog[:startAt]}
   # 終了間際なら現番組はスキップする
   if (unix_time + MARGIN_SEC_FOR_NEXT_REC + 5) * 1000 > future_programs.first[:startAt] + future_programs.first[:duration]
@@ -548,14 +551,18 @@ def show_process_list(section)
   process_list = get_process_list(section)
   if section
     process = process_list.first
-    puts "[#{process[:section]}]"
-    puts "PID: #{process[:pid]}"
-    puts "Start Time: #{process[:start_time]}"
-    elapsed_sec = Time.now - process[:start_time]
-    puts "Duration: #{sec2hhmmss(elapsed_sec)}"
-    child_process_full =  `pgrep -P #{process[:pid]} -a`
-    puts "Child: #{child_process_full}"
-    puts "Config: #{JSON.pretty_generate JSON.parse(process[:opts])}"
+    if process.nil?
+      puts "No such process"
+    else
+      puts "[#{process[:section]}]"
+      puts "PID: #{process[:pid]}"
+      puts "Start Time: #{process[:start_time]}"
+      elapsed_sec = Time.now - process[:start_time]
+      puts "Duration: #{sec2hhmmss(elapsed_sec)}"
+      child_process_full =  `pgrep -P #{process[:pid]} -a`
+      puts "Child: #{child_process_full}"
+      puts "Config: #{JSON.pretty_generate JSON.parse(process[:opts])}"
+    end
   else
     puts "    PID        TIME     SECTION"
     process_list.each do |_p|

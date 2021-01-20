@@ -176,14 +176,14 @@ class Config
     @pipe_command      ||= config["pipeCommand"]
     @following_command ||= config["followingCommand"]
     @ignore_list       ||= config["ignoreList"]
-    @ignore_list        += DEFAULT_IGNORE_LIST
+    @ignore_list         = @ignore_list.to_a + DEFAULT_IGNORE_LIST
     @logfile           ||= config["logFile"]
     @loglevel          ||= config["logLevel"]
     @mirakc_host       ||= config["server"]&.split(":")&.first
     @mirakc_port       ||= config["server"]&.split(":")&.last
     return true
   rescue
-    abort "Faild to load section #{@section} in #{@config_yml}."
+    abort "Faild to load section #{@section} in #{@config_yml}"
   end
   
   def exec_subcommand

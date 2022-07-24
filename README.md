@@ -1,21 +1,25 @@
+> **Warning**
+>
+> 現在、本スクリプトの動作確認ができないためこの README の説明は間違ってるかもしれません。ご了承ください。
+
 # tsrec
 TV program recording tool using mirakurun/mirakc
 
 ### これは何？
-mirakurun もしくは mirakc を用いた全録コマンドです。
-１つのコマンド実行で１局（１サービス）を全録します。
+mirakurun もしくは mirakc（以下「mirakurun」と総称します）を用いた全録コマンドです。
 
 ### 動機
 「全録」といっても要するにただTSストリームを保存して番組ごとに切り分けるだけなので、そのためにわざわざ EPGStation や EDCB を立ち上げるのも重いなあと思っていました。
 
-tsdumpは手軽で多機能な全録ソフトウェアですが、私の環境では番組情報を取得できないことが頻繁に発生したので使用を断念しました。
-recpt1とスクリプトの組み合わせでもなんとかできそうでしたが、mirakurun/mirakc を使えば Web APIで容易に番組情報やストリームを取得できたので、それを利用することとしました。
+tsdump は手軽で多機能な全録ソフトウェアですが、私の環境では番組情報を取得できないことが頻繁に発生したので使用を断念しました。
+recpt1 とスクリプトの組み合わせでもなんとかできそうでしたが、mirakurun を使えば Web APIで容易に番組情報やストリームを取得できたので、それを利用することとしました。
 
 ### 動作環境
 以下の環境が必要です。
-- mirakurun もしくは mirakc サーバーが稼働していること
+- mirakurun サーバーが稼働していること（以下「mirakurun」と総称します）
 - Ruby がインストールされていること
 - curl コマンドが使用できること
+- OS が fork() システムコールを使用可能なこと
 
 ### 動作確認環境
 以下の環境で動作確認しています。
@@ -25,72 +29,150 @@ recpt1とスクリプトの組み合わせでもなんとかできそうでし�
 - curl 7.68.0
 
 ### 使用方法
-本リポジトリを clone して tsrec.rb を実行するだけです。
-１つのコマンドで１サービスを全録するので、複数のサービスを全録する場合はコマンドを複数回実行してください。
+```
+# 本リポジトリをクローンする
+git clone https://github.com/fronoske/tsrec/
+# 設定ファイルを記述する
+cd tsrec
+vim tsrec.yml
+# tsrecを実行する
+bundle install
+bundle exec tsrec.rb ...
+```
+
+### コマンドライン
+```
+bundle exec tsrec.rb [subcomand] [options...]
+```
+
+### 設定ファイル
+設定ファイルは YAML 形式です。
+基本的に、全録したいチャンネルごとにセクションを記述します。
+common セクションを記述することで各セクション内で指定しない場合のデフォルトの設定を指定することができます。
+以下はサンプルです。
+
+```
+common:
+  marginSec: 5
+  outDir: "/var/tmp/tsrec"
+  outFileFormat: "%Y%m%d_%H%M %%T.ts"
+  noTS: false
+  outJson: false
+  outText: true
+  pipeCommand: null
+  followingCommand: null
+  ignoreList: []
+  logLevel: "info"
+  server: "localhost:40772"
+BS1:
+  serviceId: 101
+  outDir: "/pub/recorded/BS1"
+  logFile: "/pub/recorded/tsrec-BS1.log"
+  logLevel: "debug"
+  ignoreList: ["天気"]
+NHK-G:
+  serviceId: 1024
+  outDir: "/pub/recorded/NHK-G"
+  logFile: "/pub/recorded/tsrec-NHK-G.log"
+  logLevel: "error"
+```
+
+### サブコマンド
+
+#### start
+指定したセクションの全録を開始します。セクション名が必須です。
+
+#### stop
+指定したセクションの全録を停止します。セクション名が必須です。
+セクション名を指定しなかった場合は現在実行中のセクションを一覧表示します。
+
+#### status, ps
+現在実行中のセクションを一覧表示します。
+
+#### list
+mirakurun が受信可能なチャンネルを一覧表示します。
+放送種別（GR, BS, CS）を指定した場合はその放送種別のチャンネルのみを表示します。
+
 
 ```
 （例）
-tsrec.rb -s 1048 -l log-TBS.txt -o /recorded/TBS &
-tsrec.rb -s  101 -l log-BS1.txt -o /recorded/BS1 &
+bundle exec tsrec.rb start TBS
+bundle exec tsrec.rb start BS1
+bundle exec tsrec.rb stop TBS
 ```
+
+
 ### 使用上の注意
-- 本ツールでは暗号化の解除は行いません。mirakurun/mirakcからのストリームがすでに復号化されていることが前提です。
-- 現時点では、本ツールの置かれたディレクトリに各種の一時ファイルを格納・更新します。書き込み権限に注意してください。
+- 本ツールでは暗号化の解除は行いません。mirakurun から受信するストリームがすでに復号化されていることが前提です。
+- 本ツールの置かれたディレクトリに各種の一時ファイルを格納・更新します。書き込み権限に注意してください。
 
 ### コマンドラインオプション
+-c 以外はすべて設定ファイルで指定可能ですが、コマンドラインオプションによってそれを上書きすることができます。
+
 ```
-Usage: tsrec [options]
-    -s serviceId                     service ID
-    -m marginSec                     margin sec to rec (default: 5)
-    -o outDir                        Output directory
-    -f outfileFormat                 out file format (default: %Y%m%d_%H%M %%T.ts)
-    -j                               Output JSON file instad of text file
-    -p command                       pipe command
-    -a command                       command after each rec
-    -d                               debug mode
-    -l logfile                       output log (default: stderr)
-    -u host:port                     mirakc host:port (default: localhost:40772)
-    -S [GR|BS|CS|ALL]                Show services list
+-c config.yml       configuration file (default: tsrec.yml)
+-s serviceId        service ID
+-m marginSec        margin sec to rec [0-15] (default: 5)
+-o outDir           output directory (default: $TEMP/tsrec")
+-f outfileFormat    TS file format (default: "%Y%m%d_%H%M %%T.ts")
+-n                  not output TS file
+-j                  output program information JSON file
+-t                  output program information TEXT file
+-p command          pipe command (experimental)
+-a command          command following each rec end
+-x ignoreList       skip rec if program tilte matches the regex (separeted by comma)
+-l logfile          output log (default: stdout)
+-v loglevel         loglevel [fatal(0)|error(1)|warn(2)|info(3)|debug(4)|max(5)] (default:info)
+-u host:port        mirakurun server host:port (default: localhost:40772)
+
 ```
-| オプション  | 説明 | デフォルト |
+| オプション  | 説明 | デフォルト値 |
 |:--|:--|:--:|
-| -s ServiceID | 全録する対象のサービスID | なし（必須）|
+| -c config.yml | 設定ファイル | tsrec.yml（必須）|
+| -s ServiceId | 全録する対象のサービスID | - |
 | -m marginSec | 番組開始の何秒前から録画するか | `5` |
-| -o outDir    | 出力先ディレクトリ | なし（ファイル保存をする場合は必須）|
+| -o outDir    | 出力先ディレクトリ | $TEMP/tsrec |
 | -f outputFormat | TSファイル名の書式（後述） | `%Y%m%d_%H%M %%T.ts` |
-| -j           | 番組情報ファイルをテキスト形式でなく JSON 形式で出力する |
-| -p command   | 標準入力を得て実行するコマンド（後述） | なし |
-| -a command   | 番組の録画が終了した後に実行するコマンド（後述） | なし |
-| -d           | 詳細ログ | `false` |
+| -n           | TSファイルを出力しない。-p オプションが必須となる | - |
+| -j           | 番組情報ファイルを JSON 形式で出力する | - |
+| -t           | 番組情報ファイルをテキスト形式で出力する | - |
+| -p command   | 標準入力を得て実行するコマンド（後述） | - |
+| -a command   | 番組の録画が終了した後に実行するコマンド（後述） | - |
+| -x ignoreList | 無視する番組のタイトルを正規表現で記述したもの。コンマ区切りで複数指定可（シェルによる展開に注意） | - |
 | -l logfile   | ログファイル | `stderr` |
-| -u host:port | mirakurun/mirakcサーバーのホスト名とポート番号 | `localhost:40772` |
-| -S \[GR\|BS\|CS\|ALL\] | 放送サービスの一覧を出力して終了する | なし |
+| -v loglevel  | ログの詳細レベル | `info` |
+| -u host:port | mirakurun サーバーのホスト名とポート番号 | `localhost:40772` |
+
 
 ### TSファイル名の書式
-原則として strftime(3) に準じます。
-加えて、以下の指定文字を使用できます。
+原則として strftime(3) に準じます。加えて、以下の指定文字を使用できます。
 - %%T：番組のタイトル
 - %%S：サービス名（未実装）
 - %%s: サービスID（未実装）
 
+### 無視する番組タイトル
+デフォルトで正規表現 `^放送(休止|終了)$`, `^休止$` に合致する番組を無視します（これを無効にはできません）。\
+ignoreList によって追加することが可能です。
+
+
 ### pipeコマンド（実験的）
--pオプションにストリームを標準入力として受け付けるコマンドを指定することができます。
-- -pオプションを指定すると、ストリームを標準出力に流します。
-- このとき、-oオプションがない場合はファイルへの保存は行わず標準出力のみになり、-oオプションがある場合はファイルに保存しつつストリームを標準出力に流します。
+-p オプションでストリームを標準入力として受け付けるコマンドを指定することができます。
+- -p オプションを指定すると、ストリームを標準出力に流します。
+- このとき、-o オプションがない場合はファイルへの保存は行わず標準出力のみになり、-o オプションがある場合はファイルに保存しつつストリームを標準出力に流します。
 
 コマンドの実行時には後述の環境変数を使用できます。（※シェルによる展開に注意してください。）
 ```
 （例）
 tsrec.rb -s 1048 -p 'ffmpeg -i - "${TSREC_OUT_PATH_BASE}.mp4"' # TSファイルを保存せずffmpegでMP4エンコードする
-tsrec.rb -s 1048 -o /recorded/TBS -p 'ffmpeg -i - "${TSREC_OUT_PATH_BASE}.mp4"' # TSファイルを保存しつつMP4エンコードする
+tsrec.rb -s 1048 -o /pub/recorded/TBS -p 'ffmpeg -i - "${TSREC_OUT_PATH_BASE}.mp4"' # TSファイルを保存しつつMP4エンコードする
 ```
 
 ### postコマンド
--aオプションに各番組の録画完了後に実行するコマンドを指定することができます。
+-a オプションで各番組の録画完了後に実行するコマンドを指定することができます。\
 コマンドの実行時には後述の環境変数を使用できます。（※シェルによる展開に注意してください。）
 ```
 （例）
-tsrec.rb -s 1048 -o /recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-drop.log' # 録画完了後にtsselectでドロップチェックする
+tsrec.rb -s 1048 -o /pub/recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-drop.log' # 録画完了後にtsselectでドロップチェックする
 ```
 
 ### 環境変数
@@ -118,7 +200,7 @@ tsrec.rb -s 1048 -o /recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-drop.l
 | TSREC_END_AT_MIN        | 番組終了時刻の分 |
 | TSREC_END_AT_MIN2       | 番組終了時刻の分（2桁） |
 | TSREC_DURATION_SEC      | 番組の長さ（秒） |
-| TSREC_PROGRAM_ID        | mirakurun/mirakc の Program ID |
+| TSREC_PROGRAM_ID        | mirakurun の Program ID |
 | TSREC_EVENT_ID          | イベントID |
 | TSREC_SERVICE_ID        | サービスID |
 | TSREC_SERVICE_NAME      | サービス名 |
@@ -149,18 +231,15 @@ tsrec.rb -s 1048 -o /recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-drop.l
 | TSREC_GENRE4SUB         | ジャンル4（サブ） |
 
 ### 動作原理
-1. コマンドを実行すると、mirakucunサーバーからチャンネル情報を取得してスクリプト内部に保持します。
-そのほか、オプション処理などを行います。
-2. mirakurunサーバーから番組情報を取得します
-3. その中から、指定されたサービスの次の番組情報を取得します
+1. tsrecを実行すると、オプション処理などを行い、mirakurun サーバーからチャンネル情報を取得してスクリプト内部に保持します
+2. mirakurun サーバーから番組情報を取得します
+3. その中から指定されたサービスの次の番組情報を取得します
 4. 次の番組の開始時刻の marginSec 秒分前まで待機（sleep）します
-5. curlコマンドを呼び出し、番組をTSファイルとして保存します。
-6. curlコマンドの終了を待たずに次に進みます。
-7. 番組の終了時刻の 1 分前まで待機します。
-8. 2に戻ります。
+5. 待機が完了したら curl コマンドを呼び出し、番組を TS ファイルとして保存します
+6. curl コマンドの終了を待たずに次に進みます
+7. 番組の終了時刻の 1 分前まで待機します
+8. 2に戻ります
 終了するまでこれを繰り返します。
 
 ### TODO
-- tsrecプロセスをコントロールするためのコマンドを用意する
-- サービスIDでなくチャンネル指定で複数サービスを同時に録画する
-- もっとよい名前に改名する
+動作確認

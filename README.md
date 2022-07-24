@@ -16,7 +16,7 @@ recpt1 とスクリプトの組み合わせでもなんとかできそうでし�
 
 ### 動作環境
 以下の環境が必要です。
-- mirakurun サーバーが稼働していること（以下「mirakurun」と総称します）
+- mirakurun サーバーが稼働していること
 - Ruby がインストールされていること
 - curl コマンドが使用できること
 - OS が fork() システムコールを使用可能なこと
@@ -42,7 +42,7 @@ bundle exec tsrec.rb ...
 
 ### コマンドライン
 ```
-bundle exec tsrec.rb [subcomand] [options...]
+bundle exec tsrec.rb [subcommand] [options...]
 ```
 
 ### 設定ファイル

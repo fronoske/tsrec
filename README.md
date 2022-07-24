@@ -156,11 +156,11 @@ ignoreList によって追加することが可能です。
 
 
 ### pipeコマンド（実験的）
--p オプションでストリームを標準入力として受け付けるコマンドを指定することができます。
+-p オプションにより、ストリームを標準入力として受け付けるコマンドを指定することができます。
 - -p オプションを指定すると、ストリームを標準出力に流します。
 - このとき、-o オプションがない場合はファイルへの保存は行わず標準出力のみになり、-o オプションがある場合はファイルに保存しつつストリームを標準出力に流します。
 
-コマンドの実行時には後述の環境変数を使用できます。（※シェルによる展開に注意してください。）
+コマンドの実行時には後述の環境変数を使用することができます。（※シェルによる展開に注意してください。）
 ```
 （例）
 tsrec.rb -s 1048 -p 'ffmpeg -i - "${TSREC_OUT_PATH_BASE}.mp4"' # TSファイルを保存せずffmpegでMP4エンコードする
@@ -168,8 +168,8 @@ tsrec.rb -s 1048 -o /pub/recorded/TBS -p 'ffmpeg -i - "${TSREC_OUT_PATH_BASE}.mp
 ```
 
 ### postコマンド
--a オプションで各番組の録画完了後に実行するコマンドを指定することができます。\
-コマンドの実行時には後述の環境変数を使用できます。（※シェルによる展開に注意してください。）
+-a オプションにより、各番組の録画完了後に実行するコマンドを指定することができます。\
+コマンドの実行時には後述の環境変数を使用することができます。（※シェルによる展開に注意してください。）
 ```
 （例）
 tsrec.rb -s 1048 -o /pub/recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-drop.log' # 録画完了後にtsselectでドロップチェックする
@@ -200,7 +200,7 @@ tsrec.rb -s 1048 -o /pub/recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-dr
 | TSREC_END_AT_MIN        | 番組終了時刻の分 |
 | TSREC_END_AT_MIN2       | 番組終了時刻の分（2桁） |
 | TSREC_DURATION_SEC      | 番組の長さ（秒） |
-| TSREC_PROGRAM_ID        | mirakurun の Program ID |
+| TSREC_PROGRAM_ID        | 番組のプログラムID |
 | TSREC_EVENT_ID          | イベントID |
 | TSREC_SERVICE_ID        | サービスID |
 | TSREC_SERVICE_NAME      | サービス名 |
@@ -242,5 +242,5 @@ tsrec.rb -s 1048 -o /pub/recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-dr
 終了するまでこれを繰り返します。
 
 ### TODO
-- 動作確認
-- 不要な gems を削除する（pry, sqlite3, awesome_print は使ってないはず）
+- 動作確認する
+- 不要な gems を削除する（pry, sqlite3, awesome_print は不要なはず）

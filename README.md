@@ -242,4 +242,5 @@ tsrec.rb -s 1048 -o /pub/recorded/TBS -a 'tsselect "${TSREC_OUT_PATH}" >> TBS-dr
 終了するまでこれを繰り返します。
 
 ### TODO
-動作確認
+- 動作確認
+- 不要な gems を削除する（pry, sqlite3, awesome_print は使ってないはず）
